@@ -1,43 +1,119 @@
-import sys
+"""Summarize Instagram account metrics exported from Meta Business Suite.
 
-from config import TARGET_USERNAME, follower_history_path, post_metrics_path
-from src.collect_data import get_profile, get_recent_posts
-from src.save_data import save_count_to_csv, save_post_metrics_to_csv
-from src.data_cleaning import remove_duplicates
-from src.report_generator import generate_weekly_report
+Usage: python main.py
+Reads data/raw/*/*.csv, prints a summary and writes reports/daily_metrics.png.
+"""
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+
+from src.load_insights import load_daily_metrics
+
+REPORT_DIR = Path(__file__).resolve().parent / "reports"
+
+LABELS = {
+    "reach": "Erişim",
+    "views": "Görüntülenme",
+    "interactions": "Etkileşim",
+    "profile_visits": "Profil ziyareti",
+    "follows": "Yeni takip",
+    "link_clicks": "Link tıklaması",
+}
+
+DAYS_TR = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+
+SURFACE = "#fcfcfb"
+SERIES = "#2a78d6"
+TEXT = "#0b0b0b"
+TEXT_MUTED = "#52514e"
+GRID = "#e4e3df"
 
 
-def start(username=TARGET_USERNAME):
-    """Collect today's snapshot. Returns False if any part failed."""
-    profile = get_profile(username)
-    if profile is None:
-        print("Failed to retrieve the profile.")
-        return False
+def add_rates(df):
+    out = df.astype(float)
 
-    save_count_to_csv(profile.followers, username)
-    remove_duplicates(follower_history_path(username), subset=["date"])
+    def ratio(a, b):
+        return (out[a] / out[b].where(out[b] > 0)) * 100 if {a, b} <= set(out) else None
 
-    posts = get_recent_posts(profile)
-    if not posts:
-        print("Failed to retrieve post metrics.")
-        return False
-
-    save_post_metrics_to_csv(posts, username)
-    remove_duplicates(post_metrics_path(username), subset=["collected_date", "shortcode"])
-    return True
+    rates = {
+        "engagement_rate_%": ratio("interactions", "reach"),
+        "visit_rate_%": ratio("profile_visits", "reach"),
+        "follow_per_visit_%": ratio("follows", "profile_visits"),
+    }
+    for name, values in rates.items():
+        if values is not None:
+            out[name] = values.round(1)
+    return out
 
 
-def report():
-    report = generate_weekly_report()
-    if report:
-        print(report)
-    else:
-        print("Failed to generate the weekly report.")
+def print_summary(df):
+    start, end = df.index.min().date(), df.index.max().date()
+    print(f"Dönem: {start} - {end} ({len(df)} gün)\n")
+    print(add_rates(df).to_string(float_format=lambda v: f"{v:g}"))
+
+    totals = df.sum()
+    print("\nGünlük değerlerin toplamı:")
+    for metric, total in totals.items():
+        print(f"  {LABELS.get(metric, metric):<16} {int(total)}")
+    # The same account can be reached on several days, so this is not the
+    # number of unique accounts reached in the period.
+    print("  (Erişim toplamı tekil kişi sayısı değildir; aynı kişi her gün yeniden sayılır.)")
+
+    if {"interactions", "reach"} <= set(df):
+        print(f"\nOrtalama etkileşim oranı: {totals['interactions'] / totals['reach'] * 100:.1f}% (etkileşim / erişim)")
+    if {"follows", "profile_visits"} <= set(df) and totals["profile_visits"]:
+        print(f"Ziyaretin takibe dönüşmesi: {totals['follows'] / totals['profile_visits'] * 100:.1f}%")
+    if "reach" in df:
+        best = df["reach"].idxmax()
+        print(f"En yüksek erişim: {best.date()} ({DAYS_TR[best.day_of_week]}) - {df.loc[best, 'reach']}")
+
+
+def plot_daily(df, path):
+    metrics = list(df.columns)
+    cols = 3
+    rows = -(-len(metrics) // cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(12, 3.2 * rows), facecolor=SURFACE, squeeze=False)
+
+    for ax, metric in zip(axes.flat, metrics):
+        values = df[metric].astype(float)
+        ax.bar(df.index, values, width=0.6, color=SERIES)
+        ax.set_facecolor(SURFACE)
+        ax.set_title(LABELS.get(metric, metric), loc="left", color=TEXT, fontsize=11)
+        ax.grid(axis="y", color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color(GRID)
+        ax.tick_params(colors=TEXT_MUTED, labelsize=8, length=0)
+        ax.set_xticks(df.index)
+        ax.set_xticklabels([d.strftime("%d.%m") for d in df.index])
+        ax.set_ylim(bottom=0, top=None if values.max() > 0 else 1)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        if values.max() == 0:
+            ax.text(0.5, 0.5, "Bu dönemde hiç yok", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=9, color=TEXT_MUTED)
+        # Label only the peak day so the panel stays readable.
+        if values.max() > 0:
+            peak = values.idxmax()
+            ax.annotate(f"{int(values[peak])}", (peak, values[peak]), textcoords="offset points",
+                        xytext=(0, 3), ha="center", fontsize=8, color=TEXT)
+
+    for ax in list(axes.flat)[len(metrics):]:
+        ax.set_visible(False)
+
+    fig.suptitle("Günlük Instagram metrikleri", x=0.01, ha="left", color=TEXT, fontsize=13)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, facecolor=SURFACE)
+    plt.close(fig)
+    print(f"\nGrafik kaydedildi: {path}")
 
 
 if __name__ == "__main__":
-    ok = start()
-    report()
-    # A non-zero exit makes the GitHub Actions run show as failed instead of
-    # silently succeeding without new data.
-    sys.exit(0 if ok else 1)
+    daily = load_daily_metrics()
+    print_summary(daily)
+    plot_daily(daily, REPORT_DIR / "daily_metrics.png")

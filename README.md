@@ -1,32 +1,48 @@
 # social_media_analysis
 
-Daily tracking of a public Instagram account (`beyhankandemir_`) to understand
-which posts and events drive engagement.
+Analysis of an Instagram account's performance from the metrics Instagram
+itself provides, exported from Meta Business Suite.
 
-## What it collects
+## Why CSV exports?
 
-Every run (daily via GitHub Actions, or `python main.py`) appends one snapshot:
+The first version scraped public data (follower count, likes, comments) with
+`instaloader` on a daily GitHub Actions schedule. Instagram blocks anonymous
+requests from data-center IPs, so the scheduled runs kept failing, and scraping
+can only see public numbers anyway.
 
-| File | One row per | Columns |
-|---|---|---|
-| `data/<user>_follower_history.csv` | day | `date`, `follower_count` |
-| `data/<user>_post_metrics.csv` | day × post (latest `RECENT_POST_LIMIT` posts) | `collected_date`, `shortcode`, `posted_at`, `type`, `is_pinned`, `likes`, `comments`, `video_views`, `video_plays`, `caption` |
+Exports from Meta Business Suite are the account's own insights: reach, views,
+profile visits and follows, which explain *why* numbers move, not just *how
+much*. The scraping code is still in the git history.
 
-Post metrics are snapshotted daily, so the same post appears on several days and
-its likes/views can be followed over time. Running twice on the same day keeps
-the latest values. Metrics Instagram withholds are left empty.
+## Usage
 
-Only public data is collected, without logging in. No follower lists or other
-personal data are stored.
-
-## Setup
+1. In Meta Business Suite open **Insights**, pick a date range and export the
+   data as CSV.
+2. Put the files in a new folder under `data/raw/`, named after the range, e.g.
+   `data/raw/2026-11-04_2026-11-10/`. Keep the exported file names as they are.
+3. Run:
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-Settings live in `config.py` (`TARGET_USERNAME`, `RECENT_POST_LIMIT`).
+It prints a daily table with derived rates and writes
+`reports/daily_metrics.png`.
 
-If Instagram blocks the anonymous request, `main.py` exits with code 1 so the
-GitHub Actions run shows as failed instead of silently producing no data.
+## Metrics
+
+| Column | Export | Note |
+|---|---|---|
+| `reach` | Reach | Accounts reached that day. Daily values can't be summed into unique reach. |
+| `views` | Views | |
+| `interactions` | Content interactions | Likes, comments, saves, shares |
+| `profile_visits` | Instagram profile visits | |
+| `follows` | Instagram follows | Days with 0 are omitted in the export and filled in as 0 |
+| `link_clicks` | Instagram link clicks | |
+
+Derived rates: `engagement_rate_%` = interactions / reach,
+`visit_rate_%` = profile visits / reach, `follow_per_visit_%` = follows /
+profile visits.
+
+When export folders overlap, the newest folder (by name) wins.
