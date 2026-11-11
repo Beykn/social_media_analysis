@@ -1,12 +1,12 @@
 import pandas as pd 
 from datetime import timedelta
-from config import TARGET_USERNAME
+from config import TARGET_USERNAME, follower_history_path
 import os 
 
 
 def generate_weekly_report():
     
-    filename = f"data/{TARGET_USERNAME}_follower_history.csv"
+    filename = follower_history_path()
     if not os.path.exists(filename):
         return "File does not exists"
     df = pd.read_csv(filename)
