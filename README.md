@@ -23,7 +23,8 @@ streamlit run app.py
 
 Opens at http://localhost:8501 with three tabs:
 
-- **Funnel (Huni):** the last 7 days against the average of the previous
+- **Funnel (Huni):** follower and following counts with their change since
+  the previous entry and an estimate of unfollows, then the last 7 days against the average of the previous
   4 weeks, the reach → profile visit → follow funnel, and a weekly or daily
   trend for any metric. Changes from the list are drawn as dashed lines.
 - **Changes (Değişiklikler):** an editable list of what was changed on the
@@ -34,6 +35,11 @@ Opens at http://localhost:8501 with three tabs:
 - **Upload (Veri yükle):** drop the CSVs of one Business Suite export; they are
   saved to `data/raw/<first-day>_<last-day>/`.
 
+Business Suite exports don't contain follower or following totals, so they
+are entered by hand in the app and stored in `data/profile_snapshots.csv`.
+Unfollows between two entries are estimated as new follows (from the exports)
+minus the net change in followers, when the exports cover every day in between.
+
 Weeks are 7-day blocks counted back from the latest day of data, so they line
 up with "last 7 days" exports.
 
@@ -41,8 +47,9 @@ up with "last 7 days" exports.
 
 1. In Meta Business Suite open **Insights**, export the last 7 days as CSV and
    upload the files in the app.
-2. Add any change you made to the account to the change list.
-3. Judge a change only after it has run for 2–4 weeks; follows are rare on a
+2. Enter the follower and following counts shown on the profile.
+3. Add any change you made to the account to the change list.
+4. Judge a change only after it has run for 2–4 weeks; follows are rare on a
    small account, so a single week says little.
 
 A text summary and a static chart are also available with `python main.py`

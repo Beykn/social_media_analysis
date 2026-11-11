@@ -2,6 +2,8 @@
 
 Run: streamlit run app.py
 """
+from datetime import date
+
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -9,6 +11,7 @@ import streamlit as st
 from src.changes import CATEGORIES, load_changes, save_changes
 from src.load_insights import RAW_DIR, load_daily_metrics, save_exports
 from src.metrics import LABELS, add_rates, evaluate_change, label, weekly, with_rolling
+from src.profile import load_snapshots, save_snapshot, with_unfollows
 
 st.set_page_config(page_title="Büyüme Takibi", page_icon="📈", layout="wide")
 
@@ -30,6 +33,65 @@ def fmt(value, metric):
     if pd.isna(value):
         return "–"
     return f"%{value:.1f}" if metric.endswith("_rate") else f"{value:,.0f}".replace(",", ".")
+
+
+def profile_section(daily):
+    st.subheader("Profil")
+    snaps = load_snapshots()
+    last = None
+    if len(snaps):
+        hist = with_unfollows(snaps, daily)
+        last = hist.iloc[-1]
+        prev = hist.iloc[-2] if len(hist) > 1 else None
+
+        def change(col):
+            return None if prev is None else f"{int(last[col] - prev[col]):+d}"
+
+        cols = st.columns(4)
+        cols[0].metric("Takipçi", fmt(last["followers"], "x"), change("followers"))
+        cols[1].metric("Takip edilen", fmt(last["following"], "x"), change("following"), delta_color="off")
+        ratio = last["followers"] / last["following"] if last["following"] else None
+        cols[2].metric("Takipçi / takip edilen", f"{ratio:.2f}" if ratio else "–")
+        cols[3].metric(
+            "Takibi bırakan (tahmini)", fmt(last["unfollows"], "x"),
+            help="Önceki girişten bu yana gelen yeni takip (Business Suite) eksi takipçi sayısındaki net "
+                 "değişim. Bu aralığın tüm günleri için dışa aktarım yoksa hesaplanamaz.",
+        )
+        since = f" · önceki giriş {prev['date']:%d.%m.%Y}" if prev is not None else ""
+        st.caption(f"Son giriş: {last['date']:%d.%m.%Y}{since}")
+
+        if len(hist) > 1:
+            chart = alt.Chart(hist).mark_line(strokeWidth=2, color=SERIES_COLORS[0], point=True).encode(
+                # One labelled position per snapshot, in date order.
+                x=alt.X("yearmonthdate(date):O", title=None, axis=alt.Axis(format="%d.%m", labelAngle=0)),
+                y=alt.Y("followers:Q", title="Takipçi", scale=alt.Scale(zero=False)),
+                tooltip=[alt.Tooltip("date:T", title="Tarih", format="%d.%m.%Y"),
+                         alt.Tooltip("followers:Q", title="Takipçi"),
+                         alt.Tooltip("following:Q", title="Takip edilen")],
+            ).properties(height=220)
+            st.altair_chart(chart, use_container_width=True)
+            with st.expander("Profil geçmişi"):
+                table = hist.rename(columns={"date": "Tarih", "followers": "Takipçi", "following": "Takip edilen",
+                                             "net_change": "Net değişim", "new_follows": "Yeni takip",
+                                             "unfollows": "Takibi bırakan (tahmini)"})
+                table["Tarih"] = table["Tarih"].dt.strftime("%d.%m.%Y")
+                st.dataframe(table, hide_index=True, use_container_width=True)
+    else:
+        st.info("Henüz profil sayısı girilmedi. Profilindeki takipçi ve takip edilen sayısını aşağıdan ekle; "
+                "her hafta veri yüklerken yeniden girersen zaman içindeki değişimi burada görürsün.")
+
+    with st.expander("Profil sayılarını gir", expanded=last is None):
+        with st.form("profile_snapshot"):
+            day = st.date_input("Tarih", value=date.today(), format="DD.MM.YYYY")
+            left, right = st.columns(2)
+            followers = left.number_input("Takipçi", min_value=0, step=1,
+                                          value=int(last["followers"]) if last is not None else 0)
+            following = right.number_input("Takip edilen", min_value=0, step=1,
+                                           value=int(last["following"]) if last is not None else 0)
+            if st.form_submit_button("Kaydet", type="primary"):
+                save_snapshot(day, int(followers), int(following))
+                st.toast("Profil sayıları kaydedildi.")
+                st.rerun()
 
 
 def funnel_tab(daily, changes):
@@ -143,7 +205,7 @@ def changes_tab(daily, changes):
     )
     if st.button("Değişiklikleri kaydet", type="primary"):
         count = save_changes(edited)
-        st.success(f"{count} değişiklik kaydedildi (data/changes.csv).")
+        st.toast(f"{count} değişiklik kaydedildi.")
         st.rerun()
 
     saved = changes.dropna(subset=["start_date"])
@@ -198,6 +260,8 @@ def main():
 
     tabs = st.tabs(["Huni", "Değişiklikler", "Veri yükle"])
     with tabs[0]:
+        profile_section(daily)
+        st.divider()
         if daily is None:
             st.info("Henüz veri yok. **Veri yükle** sekmesinden Business Suite dışa aktarımını ekle.")
         else:
