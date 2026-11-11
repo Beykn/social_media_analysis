@@ -12,17 +12,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from src.load_insights import load_daily_metrics
+from src.metrics import LABELS, add_rates
 
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
-
-LABELS = {
-    "reach": "Erişim",
-    "views": "Görüntülenme",
-    "interactions": "Etkileşim",
-    "profile_visits": "Profil ziyareti",
-    "follows": "Yeni takip",
-    "link_clicks": "Link tıklaması",
-}
 
 DAYS_TR = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
@@ -31,23 +23,6 @@ SERIES = "#2a78d6"
 TEXT = "#0b0b0b"
 TEXT_MUTED = "#52514e"
 GRID = "#e4e3df"
-
-
-def add_rates(df):
-    out = df.astype(float)
-
-    def ratio(a, b):
-        return (out[a] / out[b].where(out[b] > 0)) * 100 if {a, b} <= set(out) else None
-
-    rates = {
-        "engagement_rate_%": ratio("interactions", "reach"),
-        "visit_rate_%": ratio("profile_visits", "reach"),
-        "follow_per_visit_%": ratio("follows", "profile_visits"),
-    }
-    for name, values in rates.items():
-        if values is not None:
-            out[name] = values.round(1)
-    return out
 
 
 def print_summary(df):

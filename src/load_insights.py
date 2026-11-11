@@ -38,8 +38,7 @@ def _slug(text):
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-def _read_text(path):
-    raw = path.read_bytes()
+def _decode(raw):
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return raw.decode("utf-16")
     return raw.decode("utf-8-sig")
@@ -47,7 +46,29 @@ def _read_text(path):
 
 def read_export(path):
     """Return (metric_name, Series indexed by date) for one exported CSV."""
-    lines = _read_text(Path(path)).splitlines()
+    return parse_export(Path(path).read_bytes())
+
+
+def save_exports(files, raw_dir=RAW_DIR):
+    """Store uploaded exports in data/raw/<first-day>_<last-day>/.
+
+    `files` is a list of (file_name, bytes). Every file is parsed first so a
+    file that is not a Business Suite export is rejected before anything is
+    written. Returns (folder, [metric names]).
+    """
+    parsed = [(name, raw, parse_export(raw)) for name, raw in files]
+    start = min(s.index.min() for _, _, (_, s) in parsed).date()
+    end = max(s.index.max() for _, _, (_, s) in parsed).date()
+    folder = Path(raw_dir) / f"{start}_{end}"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, raw, _ in parsed:
+        (folder / Path(name).name).write_bytes(raw)
+    return folder, [metric for _, _, (metric, _) in parsed]
+
+
+def parse_export(raw):
+    """Parse the bytes of one exported CSV into (metric_name, Series)."""
+    lines = _decode(raw).splitlines()
     if lines and lines[0].lower().startswith("sep="):
         lines = lines[1:]
     title = next(csv.reader([lines[0]]))[0]
