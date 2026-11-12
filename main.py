@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from src.load_insights import load_daily_metrics
-from src.metrics import LABELS, add_rates
+from src.metrics import LABELS, add_rates, bulk_follows_note, remove_bulk_follows
 
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
 
@@ -25,23 +25,32 @@ TEXT_MUTED = "#52514e"
 GRID = "#e4e3df"
 
 
+def rate(df, num, den):
+    both = df[[num, den]].dropna()
+    return both[num].sum() / both[den].sum() * 100 if both[den].sum() else None
+
+
 def print_summary(df):
     start, end = df.index.min().date(), df.index.max().date()
     print(f"Dönem: {start} - {end} ({len(df)} gün)\n")
-    print(add_rates(df).to_string(float_format=lambda v: f"{v:g}"))
+    print("Son 14 gün:")
+    print(add_rates(df.tail(14)).to_string(float_format=lambda v: f"{v:g}"))
 
     totals = df.sum()
     print("\nGünlük değerlerin toplamı:")
     for metric, total in totals.items():
-        print(f"  {LABELS.get(metric, metric):<16} {int(total)}")
+        days = int(df[metric].notna().sum())
+        note = f"  ({days} günlük veri)" if days < len(df) else ""
+        print(f"  {LABELS.get(metric, metric):<16} {int(total)}{note}")
     # The same account can be reached on several days, so this is not the
     # number of unique accounts reached in the period.
     print("  (Erişim toplamı tekil kişi sayısı değildir; aynı kişi her gün yeniden sayılır.)")
 
-    if {"interactions", "reach"} <= set(df):
-        print(f"\nOrtalama etkileşim oranı: {totals['interactions'] / totals['reach'] * 100:.1f}% (etkileşim / erişim)")
-    if {"follows", "profile_visits"} <= set(df) and totals["profile_visits"]:
-        print(f"Ziyaretin takibe dönüşmesi: {totals['follows'] / totals['profile_visits'] * 100:.1f}%")
+    # Rates only over days where both numbers are known.
+    if {"interactions", "reach"} <= set(df) and rate(df, "interactions", "reach") is not None:
+        print(f"\nOrtalama etkileşim oranı: {rate(df, 'interactions', 'reach'):.1f}% (etkileşim / erişim)")
+    if {"follows", "profile_visits"} <= set(df) and rate(df, "follows", "profile_visits") is not None:
+        print(f"Ziyaretin takibe dönüşmesi: {rate(df, 'follows', 'profile_visits'):.1f}%")
     if "reach" in df:
         best = df["reach"].idxmax()
         print(f"En yüksek erişim: {best.date()} ({DAYS_TR[best.day_of_week]}) - {df.loc[best, 'reach']}")
@@ -89,6 +98,8 @@ def plot_daily(df, path):
 
 
 if __name__ == "__main__":
-    daily = load_daily_metrics()
+    daily, removed = remove_bulk_follows(load_daily_metrics())
+    if bulk_follows_note(removed):
+        print(bulk_follows_note(removed))
     print_summary(daily)
     plot_daily(daily, REPORT_DIR / "daily_metrics.png")

@@ -26,17 +26,26 @@ def trend_chart(daily, weeks, metric, view, changes):
         data = pd.DataFrame({"Günlük": add_rates(daily)[metric]})
     long = data.reset_index(names="date").melt("date", var_name="Seri", value_name="Değer")
 
-    base = alt.Chart(long).encode(
+    span = (long["date"].max() - long["date"].min()).days
+    if span > 120:
+        axis = alt.Axis(format="%m.%Y", tickCount={"interval": "month", "step": 1 if span < 400 else 2})
+    elif span > 31:
+        axis = alt.Axis(format="%d.%m", tickCount={"interval": "week", "step": 1})
+    else:
         # Ticks on whole days only; weekly points get a tick per week.
-        x=alt.X("date:T", title=None, axis=alt.Axis(
-            format="%d.%m", tickCount={"interval": "day", "step": 7 if view == "Haftalık" else 1})),
+        axis = alt.Axis(format="%d.%m", tickCount={"interval": "day", "step": 7 if view == "Haftalık" else 1})
+
+    base = alt.Chart(long).encode(
+        x=alt.X("date:T", title=None, axis=axis),
         y=alt.Y("Değer:Q", title=label(metric)),
         color=alt.Color("Seri:N", scale=alt.Scale(range=SERIES_COLORS),
                         legend=alt.Legend(orient="top", title=None)),
         tooltip=[alt.Tooltip("date:T", title="Tarih", format="%d.%m.%Y"),
                  "Seri:N", alt.Tooltip("Değer:Q", format=",.1f")],
     )
-    chart = base.mark_line(strokeWidth=2) + base.mark_circle(size=70)
+    points = len(data)
+    chart = base.mark_line(strokeWidth=2 if points <= 120 else 1.5)
+    chart += base.mark_circle(size=70 if points <= 60 else 18, opacity=1 if points <= 120 else 0.6)
 
     marks = changes.dropna(subset=["start_date"])
     if len(marks):

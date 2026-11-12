@@ -31,6 +31,48 @@ MIN_DAYS = 14
 MIN_FOLLOWS = 10
 
 
+# A day with at least this many follows, and far above a normal day, is a
+# bulk recount (e.g. the account switched between private, public or
+# professional and Meta counted every follower as new), not real follows.
+BULK_FOLLOWS_MIN = 100
+BULK_FOLLOWS_FACTOR = 20
+
+
+def remove_bulk_follows(daily):
+    """Blank out bulk-recount days in `follows`.
+
+    Returns (daily, removed) where removed is a Series of the blanked values.
+    """
+    if "follows" not in daily:
+        return daily, pd.Series(dtype="Int64")
+    follows = daily["follows"]
+    typical = follows[follows > 0].median()
+    if pd.isna(typical):
+        return daily, pd.Series(dtype="Int64")
+    bulk = (follows >= BULK_FOLLOWS_MIN) & (follows > typical * BULK_FOLLOWS_FACTOR)
+    bulk = bulk.fillna(False)
+    out = daily.copy()
+    out.loc[bulk, "follows"] = pd.NA
+    return out, follows[bulk]
+
+
+def bulk_follows_note(removed):
+    if not len(removed):
+        return None
+    days = ", ".join(f"{d:%d.%m.%Y} ({int(v)})" for d, v in removed.items())
+    return (f"Şu günlerdeki yeni takip sayısı hesaba katılmadı: {days}. Bu sayılar takipçi toplamına "
+            "yakın; hesap gizli/herkese açık ya da profesyonel hesap arasında geçiş yaptığında Meta "
+            "tüm takipçileri o gün yeni takip olarak sayıyor.")
+
+
+def default_trend_metric(daily):
+    """Reach once it covers a month, otherwise views (exports of long ranges
+    don't include reach)."""
+    if "reach" in daily and daily["reach"].notna().sum() >= 28:
+        return "reach"
+    return "views" if "views" in daily else daily.columns[0]
+
+
 def label(metric):
     return LABELS.get(metric, metric)
 
@@ -53,7 +95,8 @@ def weekly(daily):
     last = daily.index.max()
     block = ((last - daily.index).days // 7).to_numpy()
     grouped = daily.astype(float).groupby(block)
-    sums = grouped.sum()
+    # min_count=1: a week with no data for a metric stays empty instead of 0.
+    sums = grouped.sum(min_count=1)
     sums["days"] = grouped.size()
     starts = daily.index.to_series().groupby(block).min()
     sums.index = pd.DatetimeIndex(starts.values, name="week_start")
@@ -74,13 +117,19 @@ def with_rolling(weeks, column, window=4):
     return out
 
 
+def _rate(frame, num, den):
+    """Rate in percent over the rows where both counts are known."""
+    both = frame[[num, den]].dropna()
+    total = both[den].sum()
+    return both[num].sum() / total * 100 if total else float("nan")
+
+
 def _period_summary(daily, start, end):
-    part = daily.loc[start:end]
-    sums = part.astype(float).sum()
-    per_day = sums / max(len(part), 1)
-    rates = add_rates(sums.to_frame().T).iloc[0]
-    values = {m: per_day[m] for m in daily.columns}
-    values.update({r: rates[r] for r in RATES if r in rates})
+    part = daily.loc[start:end].astype(float)
+    sums = part.sum(min_count=1)
+    values = {m: part[m].mean() for m in daily.columns}
+    values.update({r: _rate(part, num, den) for r, (num, den) in RATES.items()
+                   if num in part and den in part})
     return len(part), sums, pd.Series(values)
 
 
@@ -112,13 +161,16 @@ def evaluate_change(daily, start, end=None, window_days=28):
             f"Henüz erken: önce {days_before} gün, sonra {days_after} gün veri var. "
             f"Güvenilir bir sonuç için her iki dönemde de en az {MIN_DAYS} gün gerekli."
         )
-    if "follows" in sums_before and min(sums_before["follows"], sums_after["follows"]) < MIN_FOLLOWS:
+    if "follows" in sums_before and min(sums_before["follows"], sums_after["follows"]) < MIN_FOLLOWS \
+            and not pd.isna(sums_before["follows"]) and not pd.isna(sums_after["follows"]):
         notes.append(
             f"Takip sayısı az (önce {int(sums_before['follows'])}, sonra {int(sums_after['follows'])}); "
             "takip ve dönüşüm oranındaki fark şans eseri olabilir."
         )
 
     table = pd.DataFrame({"Önce": before, "Sonra": after})
+    # Metrics the exports don't cover for this period (e.g. reach) are left out.
+    table = table.dropna(how="all")
     table["Değişim %"] = ((table["Sonra"] - table["Önce"]) /
                           table["Önce"].where(table["Önce"] != 0) * 100).round(1)
     table.index = [label(m) for m in table.index]
@@ -143,19 +195,19 @@ def last_week_summary(weeks, metrics=KPI_METRICS, compare_weeks=4):
     for metric in metrics:
         base = None
         if len(previous):
-            if metric in RATES:
-                num, den = RATES[metric]
-                base = previous[num].sum() / previous[den].sum() * 100 if previous[den].sum() else None
-            else:
-                base = previous[metric].mean()
-        change = (last[metric] - base) / base * 100 if base else None
-        out[metric] = (last[metric], change)
+            base = _rate(previous, *RATES[metric]) if metric in RATES else previous[metric].mean()
+        ok = base is not None and not pd.isna(base) and base != 0 and not pd.isna(last[metric])
+        out[metric] = (last[metric], (last[metric] - base) / base * 100 if ok else None)
     return out, len(previous)
 
 
 def funnel_summary(weeks, n_weeks=4):
-    """Summed reach, profile visits and follows over the last weeks, with step rates."""
-    recent = weeks.tail(n_weeks)
+    """Summed reach, profile visits and follows over the last weeks, with step rates.
+
+    Only weeks where all three are known are used, so the steps describe the
+    same people.
+    """
+    recent = weeks[["reach", "profile_visits", "follows"]].dropna().tail(n_weeks)
     sums = recent[["reach", "profile_visits", "follows"]].sum()
     visit_pct = sums["profile_visits"] / sums["reach"] * 100 if sums["reach"] else 0
     follow_pct = sums["follows"] / sums["profile_visits"] * 100 if sums["profile_visits"] else 0

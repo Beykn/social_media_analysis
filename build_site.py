@@ -17,7 +17,7 @@ import pandas as pd
 from src.changes import load_changes
 from src.charts import followers_chart, trend_chart
 from src.load_insights import load_daily_metrics
-from src.metrics import (LABELS, evaluate_change, funnel_summary, label,
+from src.metrics import (LABELS, bulk_follows_note, default_trend_metric, remove_bulk_follows, evaluate_change, funnel_summary, label,
                          last_week_summary, weekly)
 from src.profile import load_snapshots, with_unfollows
 
@@ -117,7 +117,9 @@ def funnel_section(daily, weeks, changes, specs):
     for metric in TREND_METRICS:
         for view in VIEWS:
             specs[f"trend:{metric}:{view}"] = spec(trend_chart(daily, weeks, metric, view, changes))
-    options = "".join(f'<option value="{m}">{escape(label(m))}</option>' for m in TREND_METRICS)
+    default = default_trend_metric(daily)
+    options = "".join(f'<option value="{m}"{" selected" if m == default else ""}>{escape(label(m))}</option>'
+                      for m in TREND_METRICS)
     radios = "".join(
         f'<label><input type="radio" name="view" value="{v}"{" checked" if i == 0 else ""}> {v}</label>'
         for i, v in enumerate(VIEWS))
@@ -169,9 +171,9 @@ def changes_section(daily, changes):
 
 def build(out_dir=OUT_DIR):
     try:
-        daily = load_daily_metrics()
+        daily, removed = remove_bulk_follows(load_daily_metrics())
     except (FileNotFoundError, ValueError):
-        daily = None
+        daily, removed = None, []
     changes = load_changes()
     specs = {}
 
@@ -180,6 +182,9 @@ def build(out_dir=OUT_DIR):
         body += '<p class="muted">Henüz Business Suite verisi yok.</p>'
     else:
         body += funnel_section(daily, weekly(daily), changes, specs)
+        note = bulk_follows_note(removed)
+        if note:
+            body += f'<p class="muted">{escape(note)}</p>'
     body += f"<h2>Değişiklikler</h2>{changes_section(daily, changes)}"
 
     built = datetime.now(ZoneInfo("Europe/Istanbul"))

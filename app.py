@@ -10,7 +10,7 @@ import streamlit as st
 from src.changes import CATEGORIES, load_changes, save_changes
 from src.charts import followers_chart, trend_chart
 from src.load_insights import RAW_DIR, load_daily_metrics, save_exports
-from src.metrics import LABELS, evaluate_change, funnel_summary, label, last_week_summary, weekly
+from src.metrics import LABELS, bulk_follows_note, default_trend_metric, evaluate_change, remove_bulk_follows, funnel_summary, label, last_week_summary, weekly
 from src.profile import load_snapshots, save_snapshot, with_unfollows
 
 st.set_page_config(page_title="Büyüme Takibi", page_icon="📈", layout="wide")
@@ -22,9 +22,10 @@ TARGET_OPTIONS = [LABELS[m] for m in FUNNEL_METRICS]
 
 def load_data():
     try:
-        return load_daily_metrics()
+        daily, removed = remove_bulk_follows(load_daily_metrics())
     except (FileNotFoundError, ValueError):
-        return None
+        return None, None
+    return daily, bulk_follows_note(removed)
 
 
 def fmt(value, metric):
@@ -113,7 +114,8 @@ def funnel_tab(daily, changes):
     st.divider()
     left, right = st.columns([1, 3])
     with left:
-        metric = st.selectbox("Ölçü", FUNNEL_METRICS, format_func=label)
+        metric = st.selectbox("Ölçü", FUNNEL_METRICS, format_func=label,
+                              index=FUNNEL_METRICS.index(default_trend_metric(daily)))
         view = st.radio("Görünüm", ["Haftalık", "Günlük"], horizontal=True)
     with right:
         st.altair_chart(trend_chart(daily, weeks, metric, view, changes), use_container_width=True)
@@ -192,16 +194,20 @@ def upload_tab():
     files = st.file_uploader("CSV dosyaları", type="csv", accept_multiple_files=True)
     if files and st.button("Yükle", type="primary"):
         try:
-            folder, metrics = save_exports([(f.name, f.getvalue()) for f in files])
+            folder, metrics, skipped = save_exports([(f.name, f.getvalue()) for f in files])
         except Exception as e:
             st.error(f"Dosyalar okunamadı, Business Suite dışa aktarımı olduklarından emin ol. ({e})")
             return
         st.success(f"{len(metrics)} dosya kaydedildi: {folder.name} · " + ", ".join(label(m) for m in metrics))
+        if skipped:
+            st.info("Günlük veri içermediği için atlandı: " + ", ".join(skipped) + ". Boş geldiyse "
+                    "(Business Suite uzun aralıklarda erişim ve ziyaret vermeyebiliyor) daha kısa bir "
+                    "aralıkla yeniden dışa aktar.")
 
 
 def main():
     st.title("Instagram büyüme takibi")
-    daily = load_data()
+    daily, data_note = load_data()
     changes = load_changes()
 
     tabs = st.tabs(["Huni", "Değişiklikler", "Veri yükle"])
@@ -212,6 +218,8 @@ def main():
             st.info("Henüz veri yok. **Veri yükle** sekmesinden Business Suite dışa aktarımını ekle.")
         else:
             funnel_tab(daily, changes)
+            if data_note:
+                st.caption(data_note)
     with tabs[1]:
         changes_tab(daily, changes)
     with tabs[2]:

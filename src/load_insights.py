@@ -54,24 +54,45 @@ def save_exports(files, raw_dir=RAW_DIR):
 
     `files` is a list of (file_name, bytes). Every file is parsed first so a
     file that is not a Business Suite export is rejected before anything is
-    written. Returns (folder, [metric names]).
+    written. Empty and non-daily exports are skipped. Returns
+    (folder, [metric names], [skipped file names]).
     """
-    parsed = [(name, raw, parse_export(raw)) for name, raw in files]
+    parsed, skipped = [], []
+    for name, raw in files:
+        try:
+            parsed.append((name, raw, parse_export(raw)))
+        except NotDailyExport:
+            skipped.append(name)
+    if not parsed:
+        raise ValueError("Günlük veri içeren dosya yok (dosyalar boş ya da günlük değil).")
     start = min(s.index.min() for _, _, (_, s) in parsed).date()
     end = max(s.index.max() for _, _, (_, s) in parsed).date()
     folder = Path(raw_dir) / f"{start}_{end}"
     folder.mkdir(parents=True, exist_ok=True)
     for name, raw, _ in parsed:
         (folder / Path(name).name).write_bytes(raw)
-    return folder, [metric for _, _, (metric, _) in parsed]
+    return folder, [metric for _, _, (metric, _) in parsed], skipped
+
+
+class NotDailyExport(ValueError):
+    """The file is empty or not a daily metric (e.g. the Audience export)."""
 
 
 def parse_export(raw):
-    """Parse the bytes of one exported CSV into (metric_name, Series)."""
+    """Parse the bytes of one exported CSV into (metric_name, Series).
+
+    Raises NotDailyExport for empty files (Business Suite writes only "sep=,"
+    when it has no data for the range) and for non-daily exports such as
+    Audience, which holds age, city and country breakdowns.
+    """
     lines = _decode(raw).splitlines()
     if lines and lines[0].lower().startswith("sep="):
         lines = lines[1:]
+    if len(lines) < 2:
+        raise NotDailyExport("empty export")
     title = next(csv.reader([lines[0]]))[0]
+    if not lines[1].startswith('"Date"'):
+        raise NotDailyExport(f"not a daily export: {title}")
     metric = METRIC_NAMES.get(title, _slug(title))
 
     df = pd.read_csv(io.StringIO("\n".join(lines[1:])))
@@ -86,7 +107,7 @@ def load_daily_metrics(raw_dir=RAW_DIR):
 
     Business Suite leaves out days with a value of 0 (e.g. no new follows), so
     days missing inside an export's date range are filled with 0. Days outside
-    every export stay missing.
+    every export stay missing, as do metrics an export doesn't contain.
     """
     folders = sorted(p for p in Path(raw_dir).iterdir() if p.is_dir())
     if not folders:
@@ -94,7 +115,12 @@ def load_daily_metrics(raw_dir=RAW_DIR):
 
     frames = []
     for folder in folders:
-        series = [read_export(f) for f in sorted(folder.glob("*.csv"))]
+        series = []
+        for f in sorted(folder.glob("*.csv")):
+            try:
+                series.append(read_export(f))
+            except NotDailyExport:
+                continue
         if not series:
             continue
         start = min(s.index.min() for _, s in series)
