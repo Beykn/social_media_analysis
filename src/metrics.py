@@ -126,3 +126,37 @@ def evaluate_change(daily, start, end=None, window_days=28):
     period = (f"Önce: {shown_start:%d.%m.%Y} – {before_end:%d.%m.%Y} ({days_before} gün) · "
               f"Sonra: {start:%d.%m.%Y} – {after_end:%d.%m.%Y} ({days_after} gün)")
     return table.round(2), [period] + notes
+
+
+KPI_METRICS = ["reach", "profile_visits", "follows", "follow_rate"]
+
+
+def last_week_summary(weeks, metrics=KPI_METRICS, compare_weeks=4):
+    """Last 7-day block against the average of the blocks before it.
+
+    Returns {metric: (value, change_percent or None)} and the number of
+    previous weeks used for the comparison.
+    """
+    last = weeks.iloc[-1]
+    previous = weeks.iloc[:-1].tail(compare_weeks)
+    out = {}
+    for metric in metrics:
+        base = None
+        if len(previous):
+            if metric in RATES:
+                num, den = RATES[metric]
+                base = previous[num].sum() / previous[den].sum() * 100 if previous[den].sum() else None
+            else:
+                base = previous[metric].mean()
+        change = (last[metric] - base) / base * 100 if base else None
+        out[metric] = (last[metric], change)
+    return out, len(previous)
+
+
+def funnel_summary(weeks, n_weeks=4):
+    """Summed reach, profile visits and follows over the last weeks, with step rates."""
+    recent = weeks.tail(n_weeks)
+    sums = recent[["reach", "profile_visits", "follows"]].sum()
+    visit_pct = sums["profile_visits"] / sums["reach"] * 100 if sums["reach"] else 0
+    follow_pct = sums["follows"] / sums["profile_visits"] * 100 if sums["profile_visits"] else 0
+    return len(recent), sums, visit_pct, follow_pct

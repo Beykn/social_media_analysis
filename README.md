@@ -21,7 +21,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Opens at http://localhost:8501 with three tabs:
+The app opens in the browser with three tabs:
 
 - **Funnel (Huni):** follower and following counts with their change since
   the previous entry and an estimate of unfollows, then the last 7 days against the average of the previous
@@ -54,6 +54,16 @@ up with "last 7 days" exports.
 
 A text summary and a static chart are also available with `python main.py`
 (writes `reports/daily_metrics.png`).
+
+## Site
+
+A read-only version of the Funnel and Changes tabs is published with GitHub
+Pages: https://beykn.github.io/social_media_analysis/
+
+Data is still entered in the app. Every push to `main` runs
+`.github/workflows/pages.yml`, which builds the page with `python build_site.py`
+from the files in `data/` and deploys it, so committing and pushing the data
+after the weekly routine also updates the site. The site is public.
 
 ## Metrics
 

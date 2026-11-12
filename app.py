@@ -4,19 +4,17 @@ Run: streamlit run app.py
 """
 from datetime import date
 
-import altair as alt
 import pandas as pd
 import streamlit as st
 
 from src.changes import CATEGORIES, load_changes, save_changes
+from src.charts import followers_chart, trend_chart
 from src.load_insights import RAW_DIR, load_daily_metrics, save_exports
-from src.metrics import LABELS, add_rates, evaluate_change, label, weekly, with_rolling
+from src.metrics import LABELS, evaluate_change, funnel_summary, label, last_week_summary, weekly
 from src.profile import load_snapshots, save_snapshot, with_unfollows
 
 st.set_page_config(page_title="Büyüme Takibi", page_icon="📈", layout="wide")
 
-SERIES_COLORS = ["#2a78d6", "#eb6834"]
-CHANGE_COLOR = "#8a8984"
 FUNNEL_METRICS = ["reach", "profile_visits", "follows", "follow_rate",
                   "visit_rate", "engagement_rate", "interactions", "views", "link_clicks"]
 TARGET_OPTIONS = [LABELS[m] for m in FUNNEL_METRICS]
@@ -61,14 +59,7 @@ def profile_section(daily):
         st.caption(f"Son giriş: {last['date']:%d.%m.%Y}{since}")
 
         if len(hist) > 1:
-            chart = alt.Chart(hist).mark_line(strokeWidth=2, color=SERIES_COLORS[0], point=True).encode(
-                # One labelled position per snapshot, in date order.
-                x=alt.X("yearmonthdate(date):O", title=None, axis=alt.Axis(format="%d.%m", labelAngle=0)),
-                y=alt.Y("followers:Q", title="Takipçi", scale=alt.Scale(zero=False)),
-                tooltip=[alt.Tooltip("date:T", title="Tarih", format="%d.%m.%Y"),
-                         alt.Tooltip("followers:Q", title="Takipçi"),
-                         alt.Tooltip("following:Q", title="Takip edilen")],
-            ).properties(height=220)
+            chart = followers_chart(hist)
             st.altair_chart(chart, use_container_width=True)
             with st.expander("Profil geçmişi"):
                 table = hist.rename(columns={"date": "Tarih", "followers": "Takipçi", "following": "Takip edilen",
@@ -96,35 +87,23 @@ def profile_section(daily):
 
 def funnel_tab(daily, changes):
     weeks = weekly(daily)
-    last = weeks.iloc[-1]
-    previous = weeks.iloc[:-1].tail(4)
+    summary, n_previous = last_week_summary(weeks)
 
     st.subheader("Son 7 gün")
     period = f"{weeks.index[-1].date()} – {daily.index.max().date()}"
-    if len(previous):
-        period += f" · Karşılaştırma: önceki {len(previous)} haftanın ortalaması"
+    if n_previous:
+        period += f" · Karşılaştırma: önceki {n_previous} haftanın ortalaması"
     st.caption(period)
     cols = st.columns(4)
-    for col, metric in zip(cols, ["reach", "profile_visits", "follows", "follow_rate"]):
-        delta = None
-        if len(previous):
-            if metric == "follow_rate":
-                base = previous["follows"].sum() / previous["profile_visits"].sum() * 100 \
-                    if previous["profile_visits"].sum() else None
-            else:
-                base = previous[metric].mean()
-            if base:
-                delta = f"{(last[metric] - base) / base * 100:+.0f}%"
-        col.metric(label(metric), fmt(last[metric], metric), delta)
-    if not len(previous):
+    for col, (metric, (value, change)) in zip(cols, summary.items()):
+        delta = None if change is None else f"{change:+.0f}%"
+        col.metric(label(metric), fmt(value, metric), delta)
+    if not n_previous:
         st.info("Karşılaştırma için en az 2 haftalık veri gerekli. Her hafta yeni bir dışa aktarım ekledikçe değişimler burada görünecek.")
 
-    recent = weeks.tail(4)
-    sums = recent[["reach", "profile_visits", "follows"]].sum()
-    visit_pct = sums["profile_visits"] / sums["reach"] * 100 if sums["reach"] else 0
-    follow_pct = sums["follows"] / sums["profile_visits"] * 100 if sums["profile_visits"] else 0
+    n_weeks, sums, visit_pct, follow_pct = funnel_summary(weeks)
     st.markdown(
-        f"**Huni (son {len(recent)} hafta):** "
+        f"**Huni (son {n_weeks} hafta):** "
         f"Erişim {fmt(sums['reach'], 'reach')} → "
         f"Profil ziyareti {fmt(sums['profile_visits'], 'x')} (%{visit_pct:.1f}) → "
         f"Yeni takip {fmt(sums['follows'], 'x')} (%{follow_pct:.1f})"
@@ -144,39 +123,6 @@ def funnel_tab(daily, changes):
         table.index = table.index.date
         table = table.rename(columns={**LABELS, "days": "Gün"})
         st.dataframe(table, use_container_width=True)
-
-
-def trend_chart(daily, weeks, metric, view, changes):
-    if view == "Haftalık":
-        data = with_rolling(weeks, metric)
-    else:
-        data = pd.DataFrame({"Günlük": add_rates(daily)[metric]})
-    long = data.reset_index(names="date").melt("date", var_name="Seri", value_name="Değer")
-
-    base = alt.Chart(long).encode(
-        # Ticks on whole days only; weekly points get a tick per week.
-        x=alt.X("date:T", title=None, axis=alt.Axis(
-            format="%d.%m", tickCount={"interval": "day", "step": 7 if view == "Haftalık" else 1})),
-        y=alt.Y("Değer:Q", title=label(metric)),
-        color=alt.Color("Seri:N", scale=alt.Scale(range=SERIES_COLORS),
-                        legend=alt.Legend(orient="top", title=None)),
-        tooltip=[alt.Tooltip("date:T", title="Tarih", format="%d.%m.%Y"),
-                 "Seri:N", alt.Tooltip("Değer:Q", format=",.1f")],
-    )
-    chart = base.mark_line(strokeWidth=2) + base.mark_circle(size=70)
-
-    marks = changes.dropna(subset=["start_date"])
-    if len(marks):
-        rules = pd.DataFrame({
-            "date": pd.to_datetime(marks["start_date"]),
-            "Değişiklik": marks["description"],
-            "Kategori": marks["category"],
-        })
-        chart += alt.Chart(rules).mark_rule(color=CHANGE_COLOR, strokeDash=[4, 4], strokeWidth=1.5).encode(
-            x="date:T",
-            tooltip=[alt.Tooltip("date:T", title="Başlangıç", format="%d.%m.%Y"), "Kategori:N", "Değişiklik:N"],
-        )
-    return chart.properties(height=320)
 
 
 def changes_tab(daily, changes):
