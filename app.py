@@ -61,13 +61,13 @@ def profile_section(daily):
 
         if len(hist) > 1:
             chart = followers_chart(hist)
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, width="stretch")
             with st.expander("Profil geçmişi"):
                 table = hist.rename(columns={"date": "Tarih", "followers": "Takipçi", "following": "Takip edilen",
                                              "net_change": "Net değişim", "new_follows": "Yeni takip",
                                              "unfollows": "Takibi bırakan (tahmini)"})
                 table["Tarih"] = table["Tarih"].dt.strftime("%d.%m.%Y")
-                st.dataframe(table, hide_index=True, use_container_width=True)
+                st.dataframe(table, hide_index=True, width="stretch")
     else:
         st.info("Henüz profil sayısı girilmedi. Profilindeki takipçi ve takip edilen sayısını aşağıdan ekle; "
                 "her hafta veri yüklerken yeniden girersen zaman içindeki değişimi burada görürsün.")
@@ -118,13 +118,13 @@ def funnel_tab(daily, changes):
                               index=FUNNEL_METRICS.index(default_trend_metric(daily)))
         view = st.radio("Görünüm", ["Haftalık", "Günlük"], horizontal=True)
     with right:
-        st.altair_chart(trend_chart(daily, weeks, metric, view, changes), use_container_width=True)
+        st.altair_chart(trend_chart(daily, weeks, metric, view, changes), width="stretch")
 
     with st.expander("Haftalık tablo"):
         table = weeks.copy()
         table.index = table.index.date
         table = table.rename(columns={**LABELS, "days": "Gün"})
-        st.dataframe(table, use_container_width=True)
+        st.dataframe(table, width="stretch")
 
 
 def changes_tab(daily, changes):
@@ -138,7 +138,7 @@ def changes_tab(daily, changes):
     edited = st.data_editor(
         editable,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         key="changes_editor",
         column_config={
@@ -181,7 +181,7 @@ def changes_tab(daily, changes):
                 r = table.loc[target]
                 delta = None if pd.isna(r["Değişim %"]) else f"{r['Değişim %']:+.1f}%"
                 st.metric(f"Hedef: {target}", f"{r['Sonra']:.2f}", delta)
-            st.dataframe(table, use_container_width=True)
+            st.dataframe(table, width="stretch")
 
 
 def upload_tab():
